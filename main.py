@@ -67,7 +67,14 @@ class Enemy(GameSprite):
         self.base_shoot = 0.3
         self.can_shoot = random.random() < self.base_shoot * speed_multiplier
         self.speed_multiplier = speed_multiplier  # 保存速度倍数用于子弹
-        print("canshoot", self.base_shoot * speed_multiplier)
+      
+        self.is_powerup = random.random() < 0.1  # 10%概率是强化敌机
+        if self.is_powerup:
+            # 用颜色标记强化敌机（正式版可移除）
+            colored = pygame.Surface((self.rect.width, self.rect.height))
+            colored.fill((0, 255, 0))  # 绿色标记
+            colored.blit(self.image, (0, 0))
+            self.image = colored
 
     def fire(self):
         if not self.can_shoot:
@@ -108,15 +115,44 @@ class Hero(GameSprite):
         self.last_hit_time = 0
         self.combo_timeout = 1500 # 1.5秒内连续击中有加成
         self.combo_multiplier = 1.0
+        self.power_level = 0
+        self.max_power = 3
+        self.power_time = 0
 
     def fire(self):
         now = pygame.time.get_ticks()
         if now - self.last_shot > self.shot_delay:
             self.last_shot = now
+           # 根据强化等级发射不同子弹
+            if self.power_level == 0:  # 默认单发
+                self.__fire_single()
+            elif self.power_level == 1:  # 双发
+                self.__fire_double()
+            else:  # 三发
+                self.__fire_triple()
+          
+            
+            # 强化倒计时
+            if self.power_level > 0 and now - self.power_time > 1000:  # 1秒倒计时
+                self.power_level -= 1
+                print("Power level decreased to:", self.power_level)
+                self.power_time = now
+
+    def __fire_single(self):
+        bullet = Bullet()
+        bullet.rect.midbottom = self.rect.midtop
+        self.bullets.add(bullet)
+
+    def __fire_double(self):
+        for offset in [-15, 15]:
             bullet = Bullet()
             bullet.rect.bottom = self.rect.y
-            bullet.rect.centerx = self.rect.centerx
+            bullet.rect.centerx = self.rect.centerx + offset
             self.bullets.add(bullet)
+
+    def __fire_triple(self):
+        self.__fire_double()
+        self.__fire_single()
 
     def die(self):
         self.is_dead = True
@@ -129,7 +165,7 @@ class Hero(GameSprite):
             self.combo_count = 1  # 重置连击
 
         self.last_hit_time = now
-        print("combo_count:",self.combo_count)
+       
         # 连击加成公式：每5连击增加0.5倍 (1.0 -> 1.5 -> 2.0...)
         self.combo_multiplier = 1.0 + (self.combo_count // 5) * 0.5
         return int(10 * self.combo_multiplier)  # 基础分10分乘以倍率
@@ -166,6 +202,8 @@ class PlaneGame(object):
         self.difficulty_increase_interval = 10  # 每10秒增加难度
         self.last_difficulty_increase = self.game_start_time
         self.score = 0
+        self.using_keyboard = False  # 添加控制方式状态标记
+        
     def __create_sprites(self):
         """创建精灵和精灵组"""
         bg1 = Background()
@@ -173,6 +211,7 @@ class PlaneGame(object):
         bg2.rect.y = -bg2.rect.height
         self.back_group = pygame.sprite.Group(bg1, bg2)
         self.enemy_group = pygame.sprite.Group()
+        self.powerup_group = pygame.sprite.Group()
         self.enemy_bullets = pygame.sprite.Group()  # 所有敌机子弹
         self.hero = Hero()
         self.hero_group = pygame.sprite.Group(self.hero)
@@ -185,7 +224,7 @@ class PlaneGame(object):
             elapsed_time = current_time - self.game_start_time
 
             # 随时间增加难度
-            if current_time - self.last_difficulty_increase > self.difficulty_increase_interval:
+            if current_time - self.last_difficulty_increase > self.difficulty_increase_interval and not self.is_game_over:
                 self.speed_multiplier += 0.2  # 速度增加20%
                 self.last_difficulty_increase = current_time
                 print(f"Difficulty increased! Speed multiplier: {self.speed_multiplier}")
@@ -197,8 +236,9 @@ class PlaneGame(object):
                 elif event.type == CREATE_ENEMY_EVENT and not self.is_game_over:
                     enemy = Enemy(self.speed_multiplier)
                     self.enemy_group.add(enemy)
+                    self.powerup_group.add(enemy)
                 elif event.type == ENEMY_FIRE_EVENT and not self.is_game_over:
-                    for enemy in self.enemy_group:
+                    for enemy in self.enemy_group or self.powerup_group:  # 遍历所有敌机
                         bullet = enemy.fire()  # 调用fire方法
                         if bullet:  # 如果有子弹返回
                             self.enemy_bullets.add(bullet)  # 添加到全局子弹组
@@ -243,24 +283,58 @@ class PlaneGame(object):
 
 
 
+    
+      
+
     def __event_handle(self):
         """事件监听"""
-        # 这部分逻辑已移到主循环中
-
         if not self.is_game_over and not self.hero.is_dead:
             self.hero.fire()
-            mouse_x, mouse_y = pygame.mouse.get_pos()
-            self.hero.rect.centerx = mouse_x
+            
+            # 键盘移动
+            keys = pygame.key.get_pressed()
+            move_speed = 5
+            moved_by_keyboard = False
+            
+            if keys[pygame.K_LEFT] or keys[pygame.K_a]:
+                self.hero.rect.x -= move_speed
+                moved_by_keyboard = True
+            if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
+                self.hero.rect.x += move_speed
+                moved_by_keyboard = True
+            if keys[pygame.K_UP] or keys[pygame.K_w]:
+                self.hero.rect.y -= move_speed
+                moved_by_keyboard = True
+            if keys[pygame.K_DOWN] or keys[pygame.K_s]:
+                self.hero.rect.y += move_speed
+                moved_by_keyboard = True
+
+            # 更新控制方式状态
+            if moved_by_keyboard:
+                self.using_keyboard = True
+            elif pygame.mouse.get_rel() != (0, 0):  # 检测鼠标移动
+                self.using_keyboard = False
+
+            # 根据当前控制方式移动
+            if not self.using_keyboard:
+                mouse_x, mouse_y = pygame.mouse.get_pos()
+                if 0 <= mouse_x <= SCREEN_RECT.width and 0 <= mouse_y <= SCREEN_RECT.height:
+                    self.hero.rect.centerx = mouse_x
+                    self.hero.rect.centery = mouse_y
+
+            # 边界限制
             if self.hero.rect.left < 0:
                 self.hero.rect.left = 0
             if self.hero.rect.right > SCREEN_RECT.right:
                 self.hero.rect.right = SCREEN_RECT.right
             if self.hero.rect.top < 0:
                 self.hero.rect.top = 0
-            if mouse_y > SCREEN_RECT.height:
-                self.hero.rect.bottom = SCREEN_RECT.height
-            else:
-                self.hero.rect.centery = mouse_y
+            if self.hero.rect.bottom > SCREEN_RECT.bottom:
+                self.hero.rect.bottom = SCREEN_RECT.bottom
+                
+       
+            
+         
 
     def __check_collide(self):
         # 玩家子弹击中敌机（得分）
@@ -268,8 +342,22 @@ class PlaneGame(object):
         self.score += len(hits) * 10  # 击中得分
         if hits:
             self.score += self.hero.add_combo()  # 使用连击得分
+            
+        for bullet, enemies in hits.items():#特殊敌机
+            for enemy in enemies:
+                # 检查是否是强化敌机
+                if enemy.is_powerup:
+                    self.hero.power_level = min(self.hero.power_level+1, self.hero.max_power)
+                    self.hero.power_time = pygame.time.get_ticks()
+                
+                enemy.kill()  # 手动销毁敌机
+                self.score += self.hero.add_combo()
+                
+        if pygame.sprite.spritecollide(self.hero, self.powerup_group, True):
+            self.hero.power_level = min(self.hero.power_level+1, self.hero.max_power)
+            self.hero.power_time = pygame.time.get_ticks()
         # 敌机或子弹击中玩家（死亡检测）
-        if (pygame.sprite.spritecollide(self.hero, self.enemy_group, True) or
+        if (pygame.sprite.spritecollide(self.hero, self.enemy_group, True)  or
                 pygame.sprite.spritecollide(self.hero, self.enemy_bullets, True)):
             self.hero.die()
             self.is_game_over = True
@@ -280,6 +368,8 @@ class PlaneGame(object):
         self.back_group.draw(self.screen)
         self.enemy_group.update()
         self.enemy_group.draw(self.screen)
+        self.powerup_group.update()
+        self.powerup_group.draw(self.screen)
         self.hero_group.update()
         self.hero_group.draw(self.screen)
         self.hero.bullets.update()
